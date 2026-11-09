@@ -26,7 +26,7 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg pipx && pipx install yt-dlp
       - run: npm ci && (cd desktop && npm ci)
-      - run: ./scripts/make-test-footage.sh
+      - run: bash scripts/make-test-footage.sh
       - name: Scanner proofs
         run: |
           for FF in ffmpeg "$PWD/desktop/node_modules/ffmpeg-static/ffmpeg"; do
