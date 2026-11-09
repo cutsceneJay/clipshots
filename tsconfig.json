@@ -1,5 +1,7 @@
 {
   "include": ["**/*.ts", "**/*.tsx"],
+  // The Electron shell is bundled by desktop/scripts/build.mjs with its own dependencies.
+  "exclude": ["node_modules", "dist", "desktop/node_modules", "desktop/dist", "desktop/src", "desktop/release"],
   "compilerOptions": {
     "target": "ES2022",
     "jsx": "react-jsx",

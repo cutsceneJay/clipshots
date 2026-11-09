@@ -6,7 +6,7 @@
 //   - clips play back through the media protocol in the live board
 //   - a growing recording dropped into the watched folder is caught automatically
 // Run under Xvfb on Linux CI.
-import { _electron as electron } from "playwright";
+import { _electron as electron } from "playwright-core";
 import { createServer } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -33,7 +33,7 @@ const evil = createServer((_q, r) => r.end("<html><body>other site</body></html>
 const app = await electron.launch({
   // E2E_EXECUTABLE runs a packaged build (its bundled ffmpeg) instead of the dev app.
   executablePath: process.env.E2E_EXECUTABLE || electronPath,
-  args: [...(process.env.E2E_EXECUTABLE ? [] : ["."]), ...(process.getuid?.() === 0 ? ["--no-sandbox"] : [])],
+  args: [...(process.env.E2E_EXECUTABLE ? [] : ["."]), ...(process.getuid?.() === 0 || process.env.CI ? ["--no-sandbox"] : [])],
   env: { ...process.env, CLIPSHOTS_URL: APP, CLIPSHOTS_LIBRARY: lib, ...(process.env.E2E_EXECUTABLE ? {} : { FFMPEG_PATH: FFMPEG }) },
 });
 try {
