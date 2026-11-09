@@ -37,3 +37,4 @@ The CI workflow runs all of these on every push.
 `/mcp` is an MCP server. Tools: list/create/update events, list matches, get a match report, keep or skip a moment. Each call runs as the signed-in user.
 
 © 2020 Cutscene Creative · info@cutscenecreative.com
+
