@@ -48,7 +48,7 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb && sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: npm ci && (cd desktop && npm ci && npx playwright-core install-deps chromium)
-      - run: ./scripts/make-test-footage.sh
+      - run: bash scripts/make-test-footage.sh
       - name: Start the web app
         run: (npx vite dev --port 3000 --host 127.0.0.1 > vite.log 2>&1 &) && npx wait-on -t 120000 http://127.0.0.1:3000/catch
       - name: Electron end to end (Xvfb)
