@@ -1,0 +1,25 @@
+{
+  "name": "clipshots-desktop",
+  "productName": "Clipshots",
+  "version": "0.1.0",
+  "description": "Clipshots desktop: live highlight catcher for esports broadcasts",
+  "author": "Cutscene Creative <info@cutscenecreative.com>",
+  "license": "UNLICENSED",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "npm run build && electron .",
+    "fetch-bins": "node scripts/fetch-ytdlp.mjs",
+    "dist": "npm run build && npm run fetch-bins && electron-builder",
+    "test:e2e": "npm run build && node test/e2e.mjs"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.3.0"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3",
+    "electron-builder": "^26.0.0",
+    "esbuild": "^0.25.0",
+    "playwright-core": "^1.50.0"
+  }
+}

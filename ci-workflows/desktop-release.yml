@@ -1,0 +1,49 @@
+name: Desktop builds
+on:
+  workflow_dispatch:
+  push:
+    tags: ["desktop-v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: --win, arch: x64 }
+          - { os: macos-14, target: --mac, arch: arm64 }
+          - { os: macos-14, target: --mac, arch: x64 }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run: { working-directory: desktop, shell: bash }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install (ffmpeg for the target CPU)
+        run: npm ci
+        env: { npm_config_arch: "${{ matrix.arch }}" }
+      - run: npm run build && npm run fetch-bins
+        env: { TARGET_PLATFORM: "${{ runner.os == 'Windows' && 'win32' || 'darwin' }}" }
+      - name: Package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional signing. Without these, Mac builds are ad-hoc signed and Windows builds are unsigned.
+          CSC_LINK: ${{ runner.os == 'Windows' && secrets.WIN_CSC_LINK || secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'Windows' && secrets.WIN_CSC_KEY_PASSWORD || secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          EXTRA=""
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            if [ -z "$CSC_LINK" ]; then unset CSC_LINK CSC_KEY_PASSWORD; EXTRA="-c.mac.identity=-"; fi
+            if [ -n "$APPLE_ID" ] && [ -n "$CSC_LINK" ]; then EXTRA="$EXTRA -c.mac.notarize=true"; fi
+          elif [ -z "$CSC_LINK" ]; then unset CSC_LINK CSC_KEY_PASSWORD; fi
+          npx electron-builder ${{ matrix.target }} --${{ matrix.arch }} $EXTRA
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clipshots-${{ runner.os }}-${{ matrix.arch }}
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.dmg

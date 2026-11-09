@@ -1,0 +1,35 @@
+appId: com.cutscenecreative.clipshots
+productName: Clipshots
+copyright: © 2020 Cutscene Creative
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**
+  - config.json
+  - package.json
+asarUnpack:
+  - node_modules/ffmpeg-static/**
+extraResources:
+  - from: resources/bin
+    to: bin
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  artifactName: Clipshots-${version}-${os}-${arch}-${target}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+mac:
+  category: public.app-category.video
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  artifactName: Clipshots-${version}-mac-${arch}.${ext}
+  hardenedRuntime: true
+linux:
+  target: [AppImage]
+publish: null
