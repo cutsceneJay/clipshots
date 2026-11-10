@@ -23,6 +23,9 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+       artifactName: Clipshots-${version}-windows-setup.${ext}
+   portable:
+     artifactName: Clipshots-${version}-windows-portable.${ext}
 mac:
   category: public.app-category.video
   target:
