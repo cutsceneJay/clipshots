@@ -19,13 +19,12 @@ win:
       arch: [x64]
     - target: portable
       arch: [x64]
-  artifactName: Clipshots-${version}-${os}-${arch}-${target}.${ext}
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-       artifactName: Clipshots-${version}-windows-setup.${ext}
-   portable:
-     artifactName: Clipshots-${version}-windows-portable.${ext}
+  artifactName: Clipshots-${version}-windows-setup.${ext}
+portable:
+  artifactName: Clipshots-${version}-windows-portable.${ext}
 mac:
   category: public.app-category.video
   target:
