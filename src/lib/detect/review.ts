@@ -1,6 +1,6 @@
-// Builds the AI review request (OpenAI-compatible, sent to Gemini 2.5 Flash via
-// the Lovable AI gateway) and parses the answer. Runs on the server only; the
-// desktop catcher posts frames to /api/review and never sees the key.
+// Builds the AI review request (Google's OpenAI-compatible Gemini endpoint,
+// Gemini 2.5 Flash) and parses the answer. Runs in the desktop app's main
+// process with the key the user saved in Settings; the window never sees it.
 
 import { CATEGORIES, profileFor } from "./categories";
 import type { AiVerdict } from "./merge";
@@ -22,8 +22,8 @@ export interface ReviewInput {
   context?: string; // e.g. "Grand final, TL vs G2, map 2"
 }
 
-export const REVIEW_MODEL = "google/gemini-2.5-flash";
-export const GATEWAY_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
+export const REVIEW_MODEL = "gemini-2.5-flash";
+export const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 /** Keep requests well under gateway limits. 9 frames at ~448 px JPEG q70 is ~350 KB. */
 export const MAX_FRAMES = 9;
 export const MAX_REQUEST_BYTES = 3_500_000;

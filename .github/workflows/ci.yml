@@ -4,18 +4,17 @@ on:
   pull_request:
 
 jobs:
-  web:
+  core:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
-      - run: npm ci
-      - run: npx tsc --noEmit
-      - run: npx vitest run
-      - name: Privacy rules (local Postgres)
-        run: sudo apt-get install -y postgresql && sudo -E bash test/rls/run.sh
-      - run: npm run build
+        with: { node-version: 22 }
+      - name: Detection core
+        run: npm ci && npx tsc --noEmit && npx vitest run
+      - name: Desktop app builds
+        working-directory: desktop
+        run: npm ci && npm run typecheck && npm run build
 
   proofs:
     # Real footage through the real catcher, on ffmpeg 6 (Ubuntu) and ffmpeg 7 (the desktop's bundled build).
@@ -23,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
+        with: { node-version: 22 }
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg pipx && pipx install yt-dlp
       - run: npm ci && (cd desktop && npm ci)
       - run: bash scripts/make-test-footage.sh
@@ -45,12 +44,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
+        with: { node-version: 22 }
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb && sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - run: npm ci && (cd desktop && npm ci && npx playwright-core install-deps chromium)
+      - run: cd desktop && npm ci && npx playwright-core install-deps chromium
       - run: bash scripts/make-test-footage.sh
-      - name: Start the web app
-        run: (npx vite dev --port 3000 --host 127.0.0.1 > vite.log 2>&1 &) && npx wait-on -t 120000 http://127.0.0.1:3000/catch
       - name: Electron end to end (Xvfb)
         working-directory: desktop
         run: npm run build && xvfb-run -a node test/e2e.mjs

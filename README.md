@@ -1,40 +1,43 @@
 # Clipshots
 
-A live highlight catcher for esports broadcasts, by Cutscene Creative.
+A desktop app for Windows and Mac that catches the big moments in esports broadcasts, by Cutscene Creative.
 
-Clipshots watches a broadcast so the producer doesn't have to. When something big happens (a multi-kill, a clutch, an objective, a team fight, caster hype, a crowd pop) it cuts that moment into an MP4 a few seconds after it airs, labels it, and adds it to a report the whole team can follow live. It works the same way on past videos: YouTube and Twitch VODs, social posts, or a file on your computer.
+Clipshots watches a broadcast so the producer doesn't have to. When something big happens (a multi-kill, a clutch, an objective, a team fight, caster hype, a crowd pop), it cuts that moment into an MP4 a few seconds after it airs, labels it, and adds it to a match report. It works the same way on past videos: YouTube and Twitch VODs, social posts, or a file on your computer.
 
-## How it fits together
+Everything runs and is saved on your computer (Videos\Clipshots on Windows, Movies/Clipshots on Mac). There's no account and no website.
 
-- **Desktop app** (`desktop/`, Windows and Mac) runs on the production computer. It takes a live stream link, a past video link, the recording OBS or vMix is writing, a finished file, or an SRT/RTMP program feed. It keeps a rolling recording, scans picture and sound continuously, cuts each moment as a real MP4, and asks the AI to name and categorize it. Clips are saved in Videos\Clipshots (Windows) or Movies/Clipshots (Mac). It can also auto-catch any new recording that appears in your OBS folder.
-- **Web app** (TanStack Start on Cloudflare, editable in Lovable) is the report: events, matches, a live board that fills in during the show, a match summary afterwards, keep/skip and trim, a CSV clip log, and EDL / FCPXML / OTIO files for Premiere, Resolve and Final Cut. Teammates are invited per event as viewers or editors.
-- **Detection** (`src/lib/detect/`) is shared by both. Pass 1 ranks motion, flashes, fire/explosion colors, loudness and sharp sounds against the feed's own recent history, rewards sound and picture spiking together, and ignores static screens. Pass 2 sends build-up, peak and payoff frames to Gemini 2.5 Flash, which keeps or rejects the moment and labels it with game-specific terms. Final score is 70% AI, 30% scan; rejected moments are capped at 45 and skipped. With no AI, clips are kept with an honest "Not checked by AI" tag. Nothing is ever made up.
+## What it can watch
 
-## Setting it up
+- A live Twitch or YouTube link
+- A past video link (VODs, X, TikTok, Instagram)
+- The recording OBS or vMix is writing right now (record to MKV)
+- A finished file on your computer
+- An SRT or RTMP program feed
+- Any new recording that appears in your OBS / ShadowPlay folder (auto-catch)
 
-1. Create a Supabase project. Run the SQL in `supabase/migrations/` in order. Turn on Google and email sign-in.
-2. Copy `.env.example` to `.env` and fill it in. On Cloudflare, add the server values as secrets. `LOVABLE_API_KEY` turns on AI review.
-3. Put the live site address in `desktop/config.json` (`appUrl` and `allowedOrigins`). The desktop API is only given to those addresses.
-4. Desktop builds come from the **Desktop builds** GitHub workflow. Signing is optional: add `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` as repository secrets. Without them, Mac builds are ad-hoc signed and Windows builds are unsigned (Windows will show a SmartScreen warning).
+## The report
+
+A live board during the match, then a summary with the top moments, keep/skip and trim per clip, MP4 per moment, a CSV clip log, and EDL / FCPXML / OTIO files for Premiere, Resolve and Final Cut. The full match recording is kept for editors.
+
+## AI labels (optional)
+
+Paste a free Google AI key (aistudio.google.com/apikey) in Settings. Clipshots then sends a few still frames per moment to Gemini 2.5 Flash, which keeps or rejects the moment and names it with game-specific terms (Ace, Baron steal, Perfect). Final score is 70% AI, 30% scan; rejected moments are capped at 45 and skipped. Without a key, moments are still caught and shown as "Not checked by AI". Nothing is made up.
+
+## Project layout
+
+- `desktop/` the app: Electron main process (`src/`), the catcher (`engine/`), the window (`ui/`)
+- `src/lib/detect/` the detection core shared by the app and the tests
+- `test/proofs/` real-footage proofs; `scripts/make-test-footage.sh` builds the test videos
 
 ## Checks
 
 ```
-npm test                      # detection, AI-merge, review request, MCP
-npm run test:rls              # privacy rules on a throwaway Postgres
-npm run test:footage          # builds the proof videos
-npm run proof:scan            # catches moments from the 120 s test video
-npm run proof:live            # same, fed in real time, with clip delay
-npm run proof:srt             # real-time SRT program feed
-npm run proof:vod             # past video downloaded by link
-cd desktop && npm run test:e2e  # real Electron app under Xvfb
+npm ci && npm test                 # detection core
+bash scripts/make-test-footage.sh  # test videos
+npm run proof:scan                 # catch moments from the 120 s test video
+cd desktop && npm ci && npm run test:e2e   # the real app, end to end
 ```
 
-The CI workflow runs all of these on every push.
-
-## Agent access
-
-`/mcp` is an MCP server. Tools: list/create/update events, list matches, get a match report, keep or skip a moment. Each call runs as the signed-in user.
+CI runs all of these on every push. The **Desktop builds** workflow (Actions tab, Run workflow) makes the Windows installer, a portable exe and Mac dmgs. Optional signing secrets: MAC_CSC_LINK, MAC_CSC_KEY_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID, WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD.
 
 © 2020 Cutscene Creative · info@cutscenecreative.com
-

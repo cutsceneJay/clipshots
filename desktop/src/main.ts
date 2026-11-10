@@ -1,29 +1,26 @@
-// Clipshots desktop: opens the live web app in its own window and runs the
-// catcher natively. The web app talks to us only through the small preload API.
+// Clipshots desktop. Everything runs on this computer: the app window is
+// bundled (served from app://clipshots), the catcher runs natively with
+// ffmpeg, and clips, sessions and settings are stored locally. The only thing
+// that leaves the machine is a handful of still frames per moment for AI
+// labels, and only when the user has saved a Gemini key.
 
-import { app, BrowserWindow, ipcMain, dialog, shell, protocol, net, session as eSession, type WebContents } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, shell, protocol, net, safeStorage, session as eSession } from "electron";
 import path from "node:path";
-import { promises as fs, existsSync, readFileSync, watch, statSync, type FSWatcher } from "node:fs";
+import { promises as fs, existsSync, readdirSync, watch, statSync, type FSWatcher } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { Catcher, type CaughtMoment, type SourceKind } from "../engine/catcher";
 import type { ScanCandidate } from "../../src/lib/detect/scanner";
-import type { ReviewFrame } from "../../src/lib/detect/review";
+import { buildReviewRequest, parseVerdict, GEMINI_URL, REVIEW_MODEL, MAX_REQUEST_BYTES, type ReviewFrame } from "../../src/lib/detect/review";
+import type { AiVerdict } from "../../src/lib/detect/merge";
 
-// ---------- config ----------
-const DEFAULT_URL = "https://clipshots.lovable.app";
-const APP_URL = process.env.CLIPSHOTS_URL || readConfig().appUrl || DEFAULT_URL;
-const ALLOWED = new Set<string>([new URL(APP_URL).origin, ...(readConfig().allowedOrigins ?? []), ...(process.env.CLIPSHOTS_EXTRA_ORIGINS?.split(",").filter(Boolean) ?? [])]);
-const SIGN_IN_HOSTS = [/(^|\.)accounts\.google\.com$/, /(^|\.)supabase\.co$/, /(^|\.)lovable\.app$/, /(^|\.)lovable\.dev$/];
-
-function readConfig(): { appUrl?: string; allowedOrigins?: string[] } {
-  try {
-    return JSON.parse(readFileSync(path.join(__dirname, "..", "config.json"), "utf8"));
-  } catch {
-    return {};
-  }
-}
+// ---------- where the window comes from ----------
+const APP_ORIGIN = "app://clipshots";
+// For UI development only: `npm run dev` in desktop/ and set CLIPSHOTS_DEV_URL.
+const DEV_URL = process.env.CLIPSHOTS_DEV_URL || "";
+const ALLOWED = new Set<string>([APP_ORIGIN, ...(DEV_URL ? [`${new URL(DEV_URL).protocol}//${new URL(DEV_URL).host}`] : [])]);
+const START_URL = DEV_URL || `${APP_ORIGIN}/index.html`;
 
 function binPath(name: string): string {
   const exe = process.platform === "win32" ? `${name}.exe` : name;
@@ -48,7 +45,7 @@ function libraryRoot() {
   return path.join(base, "Clipshots");
 }
 
-// ---------- single instance, UA, privileged media scheme ----------
+// ---------- single instance, schemes ----------
 if (!app.requestSingleInstanceLock()) app.quit();
 app.on("second-instance", () => {
   if (win) {
@@ -56,9 +53,11 @@ app.on("second-instance", () => {
     win.focus();
   }
 });
-// Google refuses sign-in from embedded browsers that say "Electron".
 app.userAgentFallback = app.userAgentFallback.replace(/\s*Electron\/\S+/i, "").replace(/\s*clipshots(-desktop)?\/\S+/i, "");
-protocol.registerSchemesAsPrivileged([{ scheme: "clipshots-media", privileges: { secure: true, standard: true, stream: true, supportFetchAPI: true, corsEnabled: true } }]);
+protocol.registerSchemesAsPrivileged([
+  { scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: "clipshots-media", privileges: { secure: true, standard: true, stream: true, supportFetchAPI: true, corsEnabled: true } },
+]);
 
 let win: BrowserWindow | null = null;
 // For tests: lets a harness open an extra window with the same preload.
@@ -68,7 +67,6 @@ let win: BrowserWindow | null = null;
 interface LocalMoment extends CaughtMoment {
   trimStart?: number | null;
   trimEnd?: number | null;
-  cloudId?: string | null;
 }
 interface LocalSession {
   id: string;
@@ -83,7 +81,6 @@ interface LocalSession {
   endedAt: string | null;
   folder: string;
   moments: LocalMoment[];
-  cloud?: { eventId: string; matchId: string } | null;
   error?: string | null;
   /** Seconds of footage watched. */
   durationSec?: number;
@@ -120,29 +117,71 @@ function send(e: unknown) {
   if (win && !win.isDestroyed()) win.webContents.send("clipshots:event", e);
 }
 
-// AI review goes through the signed-in web page (it holds the session; we never hold keys).
-const pendingReviews = new Map<string, (v: unknown) => void>();
-function reviewViaPage(sessionId: string, game: string, context: string | undefined, candidate: ScanCandidate, frames: ReviewFrame[]) {
-  return new Promise<any>((resolve) => {
-    if (!win || !isTrusted(win.webContents)) return resolve(null);
-    const requestId = randomUUID();
-    const t = setTimeout(() => {
-      pendingReviews.delete(requestId);
-      resolve(null);
-    }, 45_000);
-    pendingReviews.set(requestId, (v) => {
-      clearTimeout(t);
-      resolve(v ?? null);
-    });
-    send({ type: "review", requestId, sessionId, candidate, frames, game, context });
+// ---------- AI key (encrypted with the OS keychain when available) ----------
+const keyFile = () => path.join(app.getPath("userData"), "ai-key.bin");
+async function readKey(): Promise<string | null> {
+  if (process.env.CLIPSHOTS_GEMINI_KEY) return process.env.CLIPSHOTS_GEMINI_KEY;
+  try {
+    const b = await fs.readFile(keyFile());
+    if (b[0] === 0x01) return safeStorage.decryptString(b.subarray(1));
+    return b.subarray(1).toString("utf8");
+  } catch {
+    return null;
+  }
+}
+async function writeKey(k: string | null) {
+  if (!k) return fs.rm(keyFile(), { force: true });
+  const enc = safeStorage.isEncryptionAvailable();
+  const body = enc ? safeStorage.encryptString(k) : Buffer.from(k, "utf8");
+  await fs.writeFile(keyFile(), Buffer.concat([Buffer.from([enc ? 1 : 0]), body]), { mode: 0o600 });
+}
+async function aiStatus() {
+  return { hasKey: !!(await readKey()), encrypted: safeStorage.isEncryptionAvailable() };
+}
+
+async function callGemini(body: unknown, key: string, timeoutMs = 30_000): Promise<Response> {
+  // CLIPSHOTS_GEMINI_URL lets the end-to-end test point this at a stand-in server.
+  return net.fetch(process.env.CLIPSHOTS_GEMINI_URL || GEMINI_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
+    // Never let a slow answer hold up catching: give up and label honestly instead.
+    signal: AbortSignal.timeout(timeoutMs),
   });
+}
+
+const warned = new Set<string>();
+async function review(sessionId: string, game: string, context: string | undefined, candidate: ScanCandidate, frames: ReviewFrame[]): Promise<AiVerdict | null> {
+  const key = await readKey();
+  if (!key) return null;
+  const body = buildReviewRequest({ candidate, frames, game, context });
+  if (JSON.stringify(body).length > MAX_REQUEST_BYTES) return null;
+  try {
+    const res = await callGemini(body, key);
+    if (!res.ok) {
+      const msg =
+        res.status === 400 || res.status === 401 || res.status === 403
+          ? "Google refused the AI key. Check it in Settings. Moments are still being caught."
+          : res.status === 429
+            ? "The AI key hit its limit for now. Moments are still being caught, without AI labels."
+            : "AI labels are unavailable right now. Moments are still being caught.";
+      if (!warned.has(sessionId + msg)) {
+        warned.add(sessionId + msg);
+        send({ type: "error", sessionId, message: msg });
+      }
+      return null;
+    }
+    return parseVerdict(await res.json());
+  } catch {
+    return null;
+  }
 }
 
 function slug(s: string) {
   return s.replace(/[<>:"/\\|?*\x00-\x1f]+/g, "").trim().slice(0, 50) || "Match";
 }
 
-async function startSession(o: { eventName: string; matchName: string; game: string; context?: string; source: { kind: SourceKind; value: string }; cloud?: LocalSession["cloud"] }) {
+async function startSession(o: { eventName: string; matchName: string; game: string; context?: string; source: { kind: SourceKind; value: string } }) {
   const id = randomUUID();
   const stamp = new Date().toISOString().slice(0, 16).replace("T", " ").replace(":", ".");
   const folder = path.join(libraryRoot(), `${stamp} ${slug(o.eventName)} - ${slug(o.matchName)}`);
@@ -159,7 +198,6 @@ async function startSession(o: { eventName: string; matchName: string; game: str
     endedAt: null,
     folder,
     moments: [],
-    cloud: o.cloud ?? null,
   };
   const c = new Catcher({
     source: o.source,
@@ -168,7 +206,7 @@ async function startSession(o: { eventName: string; matchName: string; game: str
     ytDlpPath: binPath("yt-dlp"),
     game: o.game,
     context: o.context,
-    review: (cand, frames) => reviewViaPage(id, o.game, o.context, cand, frames),
+    review: (cand, frames) => review(id, o.game, o.context, cand, frames),
   });
   live.set(id, { s, c });
   await saveSession(s);
@@ -193,7 +231,7 @@ async function startSession(o: { eventName: string; matchName: string; game: str
       if (s.status === "live") s.status = s.error && !s.moments.length ? "failed" : "ended";
       s.endedAt = new Date().toISOString();
       s.durationSec = Math.round(c.feedTime);
-      await stitchRecording(c, s).catch(() => null);
+      await stitchRecording(c).catch(() => null);
       await saveSession(s);
       live.delete(id);
       send({ type: "ended", sessionId: id });
@@ -202,7 +240,7 @@ async function startSession(o: { eventName: string; matchName: string; game: str
 }
 
 /** Join the 2 s pieces into one full recording for editors, then tidy up. */
-async function stitchRecording(c: Catcher, s: LocalSession) {
+async function stitchRecording(c: Catcher) {
   const csv = path.join(c.segDir, "pieces.csv");
   if (!existsSync(csv)) return;
   const pieces = (await fs.readFile(csv, "utf8")).split("\n").filter(Boolean).map((l) => l.split(",")[0]);
@@ -220,26 +258,30 @@ async function stitchRecording(c: Catcher, s: LocalSession) {
     await fs.rm(list, { force: true });
     await fs.rm(csv, { force: true });
   }
-  void s;
 }
 
 // ---------- security ----------
-function isTrusted(wc: WebContents) {
-  try {
-    return ALLOWED.has(new URL(wc.getURL()).origin);
-  } catch {
-    return false;
-  }
-}
 function insideLibrary(p: string) {
   const root = path.resolve(libraryRoot()) + path.sep;
   return path.resolve(p).startsWith(root);
 }
 function handle(channel: string, fn: (...args: any[]) => any) {
   ipcMain.handle(channel, (e, ...args) => {
-    if (!e.senderFrame || !ALLOWED.has(new URL(e.senderFrame.url).origin)) throw new Error("Not allowed");
+    if (!e.senderFrame || !ALLOWED.has(originOf(e.senderFrame.url))) throw new Error("Not allowed");
     return fn(...args);
   });
+}
+/** Node reports "null" as the origin of custom schemes, so build it by hand. */
+function originOf(url: string) {
+  const u = safeUrl(url);
+  return u ? `${u.protocol}//${u.host}` : "";
+}
+function safeUrl(u: string) {
+  try {
+    return new URL(u);
+  } catch {
+    return null;
+  }
 }
 
 // ---------- recordings-folder watching (auto-catch new OBS recordings) ----------
@@ -262,7 +304,7 @@ function startWatching() {
   watcher = null;
   const dir = prefs.watchFolder;
   if (!dir || !existsSync(dir)) return;
-  for (const f of require("node:fs").readdirSync(dir)) seen.add(path.join(dir, f));
+  for (const f of readdirSync(dir)) seen.add(path.join(dir, f));
   watcher = watch(dir, (_evt, name) => {
     if (!name) return;
     const f = path.join(dir, name.toString());
@@ -279,7 +321,9 @@ function startWatching() {
       if (growing >= 2) {
         clearInterval(iv);
         const kind: SourceKind = /\.mp4$|\.mov$/i.test(f) ? "recording" : "file";
-        startSession({ eventName: "Auto-caught recordings", matchName: path.basename(f).replace(/\.\w+$/, ""), game: prefs.watchGame ?? "generic", source: { kind, value: f } }).then(({ sessionId }) => send({ type: "status", sessionId, text: "Started from your recordings folder" }));
+        startSession({ eventName: "Auto-caught recordings", matchName: path.basename(f).replace(/\.\w+$/, ""), game: prefs.watchGame ?? "generic", source: { kind, value: f } }).then(({ sessionId }) =>
+          send({ type: "status", sessionId, text: "Started from your recordings folder" }),
+        );
       }
     }, 2000);
     setTimeout(() => clearInterval(iv), 60_000);
@@ -287,6 +331,7 @@ function startWatching() {
 }
 
 // ---------- window ----------
+let quitting = false;
 function createWindow() {
   win = new BrowserWindow({
     width: 1400,
@@ -303,17 +348,17 @@ function createWindow() {
       additionalArguments: [`--clipshots-allowed=${[...ALLOWED].join(",")}`, `--clipshots-version=${app.getVersion()}`],
     },
   });
+  // Links out of the app open in the normal browser; nothing else loads in the window.
   win.webContents.setWindowOpenHandler(({ url }) => {
     const u = safeUrl(url);
-    if (u && (ALLOWED.has(u.origin) || SIGN_IN_HOSTS.some((r) => r.test(u.hostname)))) return { action: "allow" };
-    if (u && /^https?:$/.test(u.protocol)) shell.openExternal(url);
+    if (u && /^(https?|mailto):$/.test(u.protocol)) shell.openExternal(url);
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (e, url) => {
+    if (ALLOWED.has(originOf(url))) return;
     const u = safeUrl(url);
-    if (u && (ALLOWED.has(u.origin) || SIGN_IN_HOSTS.some((r) => r.test(u.hostname)))) return;
     e.preventDefault();
-    if (u && /^https?:$/.test(u.protocol)) shell.openExternal(url);
+    if (u && /^(https?|mailto):$/.test(u.protocol)) shell.openExternal(url);
   });
   win.on("close", (e) => {
     if (live.size && !quitting) {
@@ -330,60 +375,57 @@ function createWindow() {
       for (const { c } of live.values()) c.stop();
     }
   });
-  win.loadURL(APP_URL);
-}
-let quitting = false;
-function safeUrl(u: string) {
-  try {
-    return new URL(u);
-  } catch {
-    return null;
-  }
+  win.loadURL(START_URL);
 }
 
 app.whenReady().then(async () => {
   await loadPrefs();
+  const uiRoot = path.join(__dirname, "ui");
+  protocol.handle("app", (req) => {
+    const u = new URL(req.url);
+    if (u.host !== "clipshots") return new Response("Not found", { status: 404 });
+    const rel = decodeURIComponent(u.pathname).replace(/^\/+/, "") || "index.html";
+    const abs = path.resolve(uiRoot, rel);
+    if (!abs.startsWith(path.resolve(uiRoot) + path.sep)) return new Response("Not allowed", { status: 403 });
+    return net.fetch(pathToFileURL(abs).toString());
+  });
   protocol.handle("clipshots-media", (req) => {
     const p = decodeURIComponent(new URL(req.url).pathname.replace(/^\//, ""));
     const abs = process.platform === "win32" ? p : "/" + p.replace(/^\/+/, "");
     if (!insideLibrary(abs)) return new Response("Not allowed", { status: 403 });
     return net.fetch(pathToFileURL(abs).toString(), { headers: req.headers, method: req.method });
   });
-  // Deny camera/mic/etc. by default.
   eSession.defaultSession.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === "clipboard-sanitized-write" || perm === "notifications"));
 
   handle("cs:start", (o) => startSession(o));
   handle("cs:stop", async (id: string) => live.get(id)?.c.stop());
   handle("cs:sessions", () => loadSessions());
   handle("cs:session", (id: string) => getSession(id));
+  handle("cs:deleteSession", async (id: string) => {
+    if (live.has(id)) throw new Error("Stop catching first.");
+    const s = await getSession(id);
+    if (s && insideLibrary(s.folder)) await fs.rm(s.folder, { recursive: true, force: true });
+  });
   handle("cs:updateMoment", async (sid: string, mid: string, patch: Partial<LocalMoment>) => {
     const s = await getSession(sid);
     const m = s?.moments.find((x) => x.id === mid);
     if (!s || !m) return;
-    for (const k of ["kept", "trimStart", "trimEnd", "cloudId"] as const) if (k in patch) (m as any)[k] = (patch as any)[k];
+    for (const k of ["kept", "trimStart", "trimEnd"] as const) if (k in patch) (m as any)[k] = (patch as any)[k];
     await saveSession(s);
-  });
-  handle("cs:setCloud", async (sid: string, cloud: LocalSession["cloud"]) => {
-    const s = await getSession(sid);
-    if (s) {
-      s.cloud = cloud;
-      await saveSession(s);
-    }
-  });
-  ipcMain.on("cs:answerReview", (e, requestId: string, verdict: unknown) => {
-    if (!e.senderFrame || !ALLOWED.has(new URL(e.senderFrame.url).origin)) return;
-    pendingReviews.get(requestId)?.(verdict);
-    pendingReviews.delete(requestId);
   });
   handle("cs:pickFile", async () => {
     const r = await dialog.showOpenDialog(win!, { properties: ["openFile"], filters: [{ name: "Video", extensions: ["mkv", "mp4", "mov", "ts", "flv", "webm", "m4v"] }] });
     return r.canceled ? null : r.filePaths[0];
   });
   handle("cs:showInFolder", (p: string) => (insideLibrary(p) ? shell.showItemInFolder(p) : undefined));
-  handle("cs:readFile", async (p: string) => {
-    if (!insideLibrary(p)) throw new Error("Not allowed");
-    const b = await fs.readFile(p);
-    return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+  handle("cs:openLibrary", async () => {
+    await fs.mkdir(libraryRoot(), { recursive: true });
+    await shell.openPath(libraryRoot());
+  });
+  handle("cs:libraryPath", () => libraryRoot());
+  handle("cs:openExternal", (url: string) => {
+    const u = safeUrl(url);
+    if (u && /^(https?|mailto):$/.test(u.protocol)) return shell.openExternal(url);
   });
   handle("cs:saveText", async (name: string, text: string) => {
     const r = await dialog.showSaveDialog(win!, { defaultPath: path.join(libraryRoot(), path.basename(name)) });
@@ -417,7 +459,25 @@ app.whenReady().then(async () => {
     startWatching();
     return { folder: prefs.watchFolder ?? null, game: prefs.watchGame ?? "generic" };
   });
-  handle("cs:isRendering", () => live.size > 0);
+  handle("cs:getAi", () => aiStatus());
+  handle("cs:setAiKey", async (k: string | null) => {
+    await writeKey(k ? String(k).trim() : null);
+    return aiStatus();
+  });
+  handle("cs:testAi", async () => {
+    const key = await readKey();
+    if (!key) return { ok: false, message: "No key saved yet." };
+    try {
+      const res = await callGemini({ model: REVIEW_MODEL, messages: [{ role: "user", content: "Reply with the word OK." }], max_tokens: 5 }, key);
+      if (res.ok) return { ok: true, message: "The AI key works." };
+      if (res.status === 400 || res.status === 401 || res.status === 403) return { ok: false, message: "Google didn't accept that key. Check you copied all of it." };
+      if (res.status === 429) return { ok: false, message: "The key works but has hit its limit for now." };
+      return { ok: false, message: "Couldn't reach Google right now. Try again in a minute." };
+    } catch {
+      return { ok: false, message: "Couldn't reach Google. Check this computer is online." };
+    }
+  });
+  handle("cs:isCatching", () => live.size > 0);
 
   startWatching();
   createWindow();

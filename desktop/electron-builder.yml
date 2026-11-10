@@ -6,7 +6,7 @@ directories:
   buildResources: build
 files:
   - dist/**
-  - config.json
+  - "!dist/**/*.map"
   - package.json
 asarUnpack:
   - node_modules/ffmpeg-static/**

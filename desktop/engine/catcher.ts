@@ -222,7 +222,13 @@ export class Catcher extends EventEmitter {
   stop() {
     this.stopping = true;
     // "q" is not available with -nostdin; SIGINT lets ffmpeg close files cleanly.
-    this.ff?.kill("SIGINT");
+    const ff = this.ff;
+    ff?.kill("SIGINT");
+    // A recording that's still growing never reaches its end, so ffmpeg can sit
+    // waiting after the first request. Ask again, then insist.
+    const alive = () => ff && ff.exitCode === null && ff.signalCode === null;
+    setTimeout(() => alive() && ff!.kill("SIGINT"), 4000);
+    setTimeout(() => alive() && ff!.kill("SIGKILL"), 10000);
     this.ytProc?.kill();
   }
 

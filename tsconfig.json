@@ -1,30 +1,16 @@
 {
-  "include": ["**/*.ts", "**/*.tsx"],
-  // The Electron shell is bundled by desktop/scripts/build.mjs with its own dependencies.
-  "exclude": ["node_modules", "dist", "desktop/node_modules", "desktop/dist", "desktop/src", "desktop/release"],
+  "include": ["src/**/*.ts", "test/**/*.ts", "desktop/engine/**/*.ts"],
   "compilerOptions": {
     "target": "ES2022",
-    "jsx": "react-jsx",
     "module": "ESNext",
-    "paths": {
-      "#/*": ["./src/*"],
-      "@/*": ["./src/*"]
-    },
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vite/client"],
-
-    /* Bundler mode */
     "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "noEmit": true,
-
-    /* Linting */
-    "skipLibCheck": true,
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
     "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
     "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
+    "noUnusedParameters": true
   }
 }

@@ -1,4 +1,4 @@
-// Sandboxed preload. Exposes window.clipshotsDesktop only to the Clipshots site.
+// Sandboxed preload. Exposes window.clipshotsDesktop only to the Clipshots window.
 import { contextBridge, ipcRenderer } from "electron";
 
 const arg = (k: string) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3) ?? "";
@@ -8,28 +8,33 @@ if (allowed.includes(location.origin)) {
   const listeners = new Set<(e: unknown) => void>();
   ipcRenderer.on("clipshots:event", (_e, payload) => listeners.forEach((l) => l(payload)));
   const ua = navigator.userAgent;
+  const call = (ch: string) => (...a: unknown[]) => ipcRenderer.invoke(ch, ...a);
   contextBridge.exposeInMainWorld("clipshotsDesktop", {
     version: arg("clipshots-version"),
     platform: /Windows/.test(ua) ? "windows" : /Mac/.test(ua) ? "mac" : "linux",
-    start: (o: unknown) => ipcRenderer.invoke("cs:start", o),
-    stop: (id: string) => ipcRenderer.invoke("cs:stop", id),
-    sessions: () => ipcRenderer.invoke("cs:sessions"),
-    session: (id: string) => ipcRenderer.invoke("cs:session", id),
-    updateMoment: (s: string, m: string, p: unknown) => ipcRenderer.invoke("cs:updateMoment", s, m, p),
-    setCloud: (s: string, c: unknown) => ipcRenderer.invoke("cs:setCloud", s, c),
+    start: call("cs:start"),
+    stop: call("cs:stop"),
+    sessions: call("cs:sessions"),
+    session: call("cs:session"),
+    deleteSession: call("cs:deleteSession"),
+    updateMoment: call("cs:updateMoment"),
     onEvent: (cb: (e: unknown) => void) => {
       listeners.add(cb);
       return () => listeners.delete(cb);
     },
-    answerReview: (id: string, v: unknown) => ipcRenderer.send("cs:answerReview", id, v),
-    pickFile: () => ipcRenderer.invoke("cs:pickFile"),
-    showInFolder: (p: string) => ipcRenderer.invoke("cs:showInFolder", p),
+    pickFile: call("cs:pickFile"),
+    showInFolder: call("cs:showInFolder"),
+    openLibrary: call("cs:openLibrary"),
+    libraryPath: call("cs:libraryPath"),
     mediaUrl: (p: string) => `clipshots-media://local/${encodeURIComponent(p)}`,
-    readFile: (p: string) => ipcRenderer.invoke("cs:readFile", p),
-    saveText: (n: string, t: string) => ipcRenderer.invoke("cs:saveText", n, t),
-    exportTrim: (s: string, m: string) => ipcRenderer.invoke("cs:exportTrim", s, m),
-    getWatch: () => ipcRenderer.invoke("cs:getWatch"),
-    setWatch: (f: string | null, g?: string) => ipcRenderer.invoke("cs:setWatch", f, g),
-    isRendering: () => ipcRenderer.invoke("cs:isRendering"),
+    saveText: call("cs:saveText"),
+    exportTrim: call("cs:exportTrim"),
+    getWatch: call("cs:getWatch"),
+    setWatch: call("cs:setWatch"),
+    getAi: call("cs:getAi"),
+    setAiKey: call("cs:setAiKey"),
+    testAi: call("cs:testAi"),
+    openExternal: call("cs:openExternal"),
+    isCatching: call("cs:isCatching"),
   });
 }
