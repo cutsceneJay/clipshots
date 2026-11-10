@@ -11,8 +11,8 @@ jobs:
       matrix:
         include:
           - { os: windows-latest, target: --win, arch: x64 }
-          - { os: macos-14, target: --mac, arch: arm64 }
-          - { os: macos-14, target: --mac, arch: x64 }
+          - { os: macos-15, target: --mac, arch: arm64 }
+          - { os: macos-15, target: --mac, arch: x64 }
     runs-on: ${{ matrix.os }}
     defaults:
       run: { working-directory: desktop, shell: bash }
